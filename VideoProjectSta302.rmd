@@ -1,0 +1,379 @@
+---
+title: "Video Assignment"
+author: "Benjamin Zhang"
+date: "11/11/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## EDA
+
+# Filtering the data set 
+```{r}
+# Load video project dataset 
+uni_data <- read.csv("Video_project_dataset.csv", header=T)
+
+
+# Percentage of students neighborhood with at least an undegraduate degree
+uni_data$PCT_DEG <- uni_data$PCT_BA + uni_data$PCT_GRAD_PROF
+
+# Filter out dataset 
+cleaned_uni_data <- uni_data[c("UNITID", "ADM_RATE", "PCT_WHITE", "PCT_BORN_US", "PCT_DEG", "COSTT4_A", "FEMALE", "UG25ABV", "CONTROL", "AVGFACSAL", "NUMBRANCH", "REGION")]
+
+
+# reset the admission rate values with 0.0000 to 0.0001
+row_0 <- cleaned_uni_data[cleaned_uni_data$ADM_RATE==0.0000,]
+row_0$ADM_RATE = 0.0001
+                            
+cleaned_uni_data <- cleaned_uni_data[!(cleaned_uni_data$ADM_RATE==0.0000),]
+cleaned_uni_data <- rbind(cleaned_uni_data, row_0)
+```
+* note, we reset the admission rate values with 0.0000 to 0.0001 
+Please note we merged  PCT_BA & PCT_GRAD_PROF to create a new variable "PCT_DEGREE" and allows easier processing. 
+
+
+
+# Plotting each predictor vs response rate
+
+#Distribution of the variables
+```{r}
+par(mfrow=c(2,3))
+
+hist(cleaned_uni_data$ADM_RATE, main = "Admission Rates", xlab = "ADM_RATE")
+hist(cleaned_uni_data$PCT_WHITE, main="% Neighbourhood Caucasian", xlab="PCT_WHITE")
+hist(cleaned_uni_data$PCT_BORN_US, main="% Neighbourhood Born in US", xlab="PCT_BORN_US")
+hist(cleaned_uni_data$PCT_DEG, main="% Neighbourhood with Degree", xlab="PCT_DEG")
+hist(cleaned_uni_data$COSTT4_A, main="Mean Cost of Attendance", xlab="COSTT4_A")
+hist(cleaned_uni_data$FEMALE, main="% Female Students", xlab="FEMALE")
+hist(cleaned_uni_data$UG25ABV, main= "% Above 25", xlab="UG25ABV")
+# Public/Private-Non/Private-Prof
+hist(cleaned_uni_data$CONTROL, main="Insititutional Control", xlab="Insititutional Control")
+hist(cleaned_uni_data$AVGFACSAL, main="Average Faculty Salary", xlab="AVGFACSAL")
+hist(cleaned_uni_data$NUMBRANCH, main="Number of Campuses", xlab="NUMBRANCH")
+hist(cleaned_uni_data$REGION, main="Region of US", xlab="REGION")
+
+
+```
+overall clear lack of normality in Number of campuses, the percentage of students above the age of 25, percentage of the neighborhood  students was from  born in the US, and the percentage of the neighbourhood.
+
+However, out of all of these distributions, the Number of campuses seems the most alarming. This indicates branch number has an extreme non-linear relationship. As such, we'd consider dividing these results into categorical variables (one campus, 2-4 campuses, and over 5 campuses). This way it could improve interpretability of our model. 
+
+#Making the adjustments
+```{r}
+
+Campus_Num <- cleaned_uni_data$NUMBRANCH
+
+Campus_Num[Campus_Num > 4] <- 5
+Campus_Num <- replace(Campus_Num, Campus_Num==3, 2)
+Campus_Num <- replace(Campus_Num, Campus_Num==4, 2)
+Campus_Num <- replace(Campus_Num, Campus_Num==5, 3)
+
+# might need to delete 
+cleaned_uni_data$CAMPUSES <- Campus_Num
+
+```
+
+#Model using every predictor (for reference only) you can choose whether or not you wish to include it
+```{r}
+# Trying to use everything at once
+modall <- lm(ADM_RATE ~  STABBR + NUMBRANCH + CONTROL + REGION + HBCU + PBI + TRIBAL + HSI + WOMENONLY + COSTT4_A + AVGFACSAL + PFTFAC + PCTPELL + UG25ABV + INC_PCT_LO + PAR_ED_PCT_1STGEN + FEMALE + MD_FAMINC + PCT_WHITE + PCT_BLACK + PCT_ASIAN + PCT_HISPANIC + PCT_BA + PCT_GRAD_PROF + PCT_BORN_US + POVERTY_RATE + UNEMP_RATE, data=uni_data)
+summary(modall)
+
+plot(uni_data$ADM_RATE ~ fitted(modall), main="Y versus Y-hat", xlab="Y-hat", ylab="Y")
+abline(a = 0, b = 1)
+lines(lowess(uni_data$ADM_RATE ~ fitted(modall)), lty=2)
+
+```
+
+
+
+#Preliminary linear model results using all predictors we filtered out 
+```{r}
+
+# Building the preliminary model with the 10 different predictors 
+#mod <- lm(ADM_RATE ~ PCT_WHITE  + PCT_BORN_US  + PCT_DEG  + COSTT4_A  + FEMALE  + UG25ABV  + factor(CONTROL)  + AVGFACSAL  + NUMBRANCH + factor(REGION), data= cleaned_uni_data)
+
+
+# New test REMOVE 
+mod <- lm(ADM_RATE ~ PCT_WHITE  + PCT_BORN_US  + PCT_DEG  + COSTT4_A  + FEMALE  + UG25ABV  + factor(CONTROL)  + AVGFACSAL  + CAMPUSES + factor(REGION), data= cleaned_uni_data)
+
+summary(mod)
+
+r <- resid(mod)
+
+plot(cleaned_uni_data$ADM_RATE ~ fitted(mod), main="Y versus Y-hat", xlab="Y-hat", ylab="Y")
+abline(a = 0, b = 1)
+lines(lowess(cleaned_uni_data$ADM_RATE ~ fitted(mod)), lty=2)
+
+# UG25ABV
+# PCT_DEG
+```
+Results from our preliminary model seems to indicate that our model isn't the best and that there seems to be some skew. This could mean that some assumptions have been violated. However, it would be a pain to perform a pairwise comparison between each of the variables. So, we will attempt to filter out more of the predictors first using a series of partial F-tests before we make further evaluations on the norm
+
+
+#Further filtering of predictors using summary results from our prelimiary model
+From the summary of our preliminary model, we could identify several predictors who had very large p values. Again, these p-values might not be accurate since we might have violated some assumptions and the fact that we haven't tried to correct for these violations. Nevertheless we will perform a partial F test to determine if we should be able to drop these variables. 
+```{r}
+##### Further filtering the data ####
+
+# Drop predictors: UG25ABV, PCT_DEG, PCT_BORN_US
+# mod2 <- lm(ADM_RATE ~ PCT_WHITE  + COSTT4_A  + FEMALE  + factor(CONTROL)  + AVGFACSAL  + NUMBRANCH  + factor(REGION), data= cleaned_uni_data)
+
+
+# testing REMOVE: Campuses as a categorical 
+mod2 <- lm(ADM_RATE ~ PCT_WHITE  + COSTT4_A  + FEMALE  + factor(CONTROL)  + AVGFACSAL  + factor(CAMPUSES)  + factor(REGION), data= cleaned_uni_data)
+
+# Partial F-test comparing original and filtered
+anova(mod2, mod)
+# Here, because the Pr(>F) is 0.2835, we cannot reject the null hypothesis, we can therefore remove these predictor variables from the equation
+
+
+# cleaned data set
+final_data <- cleaned_uni_data[c("UNITID", "ADM_RATE", "PCT_WHITE", "COSTT4_A", "FEMALE",  "AVGFACSAL", "NUMBRANCH", "CONTROL","REGION")]
+
+# cleaned data set REMOVE 
+final_data <- cleaned_uni_data[c("UNITID", "ADM_RATE", "PCT_WHITE", "COSTT4_A", "FEMALE",  "AVGFACSAL", "CAMPUSES", "CONTROL","REGION")]
+
+
+#mod3 <-lm(ADM_RATE ~ PCT_WHITE  + COSTT4_A  + CONTROL:COSTT4_A + FEMALE  + factor(CONTROL)  + AVGFACSAL + CONTROL:AVGFACSAL  + NUMBRANCH  + factor(REGION), data= cleaned_uni_data)
+
+#anova(mod2, mod3)
+```
+As we can see, Pr(>F) is 0.2835
+
+
+# Pairwise comparison of final model 
+```{r}
+# first check condition 1 and 2
+# pairs let us see pairwise plots of everything
+pairs(final_data[,2:7])
+
+# REGION and CONTROL are not shown in this comparison since they are categorical variables
+
+```
+Please note "REGION", "CONTROL" and "Campuses" were removed from this comparison since they store categorical values. However there seems to be non-linear relationship between several predictors. THis mainly being AVGFACSAL (average faculty salary) vs COSTT4_A (Average Tuition cost), AVGFACSAL vs FEMALE (percentage of females students in the school). 
+
+(explainations for this): As average faculty salary goes up, the female percentage seems to rest closer and closer to 50% (less variation) >>> potentially political pressure. Also, there may be a significant relationship between CONTROL (public/private-non profit/private-for profit) and average cost for attendance and average faculty salary that undermines the relationship between COSTT4_A and AVGFACSAL and their influence over admission rates. 
+
+
+
+# residual plot of the model
+```{r}
+r <- resid(mod2)
+plot(r ~ fitted(mod2), main = "Newly fitted plot", xlab = "Fitted", ylab ="res.")
+
+# you can remove this if you want
+lines(lowess(r ~ fitted(mod2)), lty=2, col="red")
+
+qqnorm(r)
+qqline(r, col = "steelblue", lwd = 2)
+
+```
+Residuals seem to not remain constant throughout the model. It would seem that there is very high variance 
+
+#residual plot of predictors
+```{r}
+par(mfrow=c(2,3))
+plot(r ~ final_data$PCT_WHITE, main = "Percentage of Caucasians", xlab = "PCT_WHITE", ylab ="res")
+plot(r ~ final_data$COSTT4_A, main = "Average Cost per Year", xlab = "COSTT4_A", ylab ="res")
+plot(r ~ final_data$FEMALE, main = "Percentage of Female students", xlab = "FEMALE", ylab ="res")
+plot(r ~ final_data$AVGFACSAL, main = "Average Faculty Salary", xlab = "AVGFACSAL", ylab ="res")
+
+# EDITED THIS, CHANGE $NUMBRANCH back into $CAMPUSES REMOVE
+plot(r ~ final_data$CAMPUSES, main = "Number of Campuses", xlab = "NUMBRANCH", ylab ="res")
+
+```
+```{r}
+par(mfrow=c(2,3))
+plot(r ~ final_data$PCT_WHITE, main = "Percentage of Caucasians", xlab = "PCT_WHITE", ylab ="res")
+lines(lowess(r ~ final_data$PCT_WHITE), lty=2, col="red")
+plot(r ~ final_data$COSTT4_A, main = "Average Cost per Year", xlab = "COSTT4_A", ylab ="res")
+lines(lowess(r ~ final_data$COSTT4_A), lty=2, col="red")
+plot(r ~ final_data$FEMALE, main = "Percentage of Female students", xlab = "FEMALE", ylab ="res")
+lines(lowess(r ~ final_data$FEMALE), lty=2, col="red")
+plot(r ~ final_data$AVGFACSAL, main = "Average Faculty Salary", xlab = "AVGFACSAL", ylab ="res")
+lines(lowess(r ~ final_data$AVGFACSAL), lty=2, col="red")
+
+#REMOVE : but actually just change $CAMPUSES back into $NUMBRANCH
+plot(r ~ final_data$CAMPUSES, main = "Number of Campuses", xlab = "NUMBRANCH", ylab ="res")
+lines(lowess(r ~ final_data$CAMPUSES), lty=2, col="red")
+```
+Mention something about which conditions have been violated. (aka normality assumptions, etc)
+
+
+
+# Box-Cox transformations
+We performed a boxCox. However, removed variables "REGION", CONTROL" and  since they are stored categorical variables and the boxCox does not quantify these variables well. 
+```{r}
+#install.packages("car")
+library(car)
+
+# first Box-Cox on Y
+mod2_box <- lm(ADM_RATE ~ PCT_WHITE  + COSTT4_A  + FEMALE + AVGFACSAL  + NUMBRANCH, data= cleaned_uni_data)
+
+mod2_box <- lm(ADM_RATE ~ PCT_WHITE  + COSTT4_A  + FEMALE + AVGFACSAL, data= cleaned_uni_data)
+
+boxCox(mod2_box)
+
+#doesn't produce text output, instead it just outputs a plot. This is a function where it is log likelihood value wants to be maximized. 
+# boxcox is a bit difficult to interpret and use sometimes 
+
+# next, Box-Cox on all X's
+powerTransform
+
+# Finds transformation that can possibly correct results 
+
+# us the cbind to bind all the predictors >>> perform transformations on the data sets >> and model them agaisnt ~ "1"  
+
+#cbind>> the info in here is treated like the response, using nothing as predictor 
+p <- powerTransform(cbind(final_data[,3], final_data[,4],  final_data[,5],  final_data[,6])~ 1)
+
+summary(p)
+#lower bound and upr bound >>> the intervals 
+# powerTransform aslo performs two statistical test 
+
+#last test>>> testing whether the last value is 1, this means that 
+# However pval < 2.22e-16. This means transformations are most likely necessary
+
+final_data
+```
+We performed a boxCox and tested whether transformations needed to be applied to the current model. We obtained a pval < 2.22e-16. This means transformations are most likely necessary. 
+
+```{r}
+# finally, Box-Cox predictors and response together. How we interpret power 
+
+# add the response values
+p2= powerTransform(cbind(final_data[,2], final_data[,3], final_data[,4],  final_data[,5],  final_data[,6])~ 1)
+
+summary(p2)
+
+
+```
+
+#modified boxcox testing
+```{r}
+#install.packages("car")
+library(car)
+
+# first Box-Cox on Y
+mod2_m <- lm(I(ADM_RATE**1.5) ~ I(PCT_WHITE**3.50)  + I(sqrt(COSTT4_A))  + FEMALE + AVGFACSAL + I(NUMBRANCH**0.33), data= cleaned_uni_data)
+
+# REMOVE
+mod3_m <- lm(I(ADM_RATE**1.5) ~ I(PCT_WHITE**3.50)  + I(COSTT4_A**0.33)  + I(FEMALE**1.5) + I(AVGFACSAL**0.33)  + factor(CAMPUSES)  + factor(REGION) + factor(CONTROL), data= final_data)
+
+
+# Unsure if this is correct 
+modified_final_dataset <- final_data
+
+
+#unsure if this is correct, probably is 
+modified_final_dataset$PCT_WHITE <- modified_final_dataset$PCT_WHITE**3.50
+modified_final_dataset$COSTT4_A <- modified_final_dataset$COSTT4_A**0.33
+modified_final_dataset$FEMALE <- modified_final_dataset$FEMALE**1.5
+modified_final_dataset$AVGFACSAL <- modified_final_dataset$AVGFACSAL**0.33
+
+
+cleaned_uni_data
+modified_final_dataset
+
+```
+
+
+# Final Adjusted model 
+Comparison between the two. 
+```{r}
+#Comparison between 
+summary(mod2)
+summary(mod3_m)
+```
+both the Multiple R-squared and Adjusted R-squared seemed to have decreased, in our updated model. However we had issues 
+
+
+# Re-assessing the residuals 
+```{r}
+# check the assumptions on the new model
+# lets recheck our plots
+
+
+# pairwise comparisons 
+
+r2_m<- resid(mod2_m)
+
+```
+
+
+
+```{r}
+plot((final_data$ADM_RATE)**1.5 ~ fitted(mod3_m), main="sqrt(Y) versus Y-hat", xlab="Y-hat", ylab="sqrt(Y)")
+abline(a = 0, b = 1)
+
+# lowess line>> shows smooth line data. This COULD be indicative of some violation, but it can also be misleading sometimes. 
+lines(lowess((final_data$ADM_RATE)**1.5 ~ fitted(mod3_m)), lty=2)
+```
+```{r}
+# lets also perform a pairwise comparison 
+pairs(modified_final_dataset[,2:7])
+```
+
+```{r}
+# make all residual plots
+par(mfrow=c(2,3))
+plot(r2_m ~ fitted(mod3_m), main = "Model", xlab = "Fitted", ylab ="res.")
+plot(r2_m  ~modified_final_dataset$PCT_WHITE, main = "Percentage of Caucasians", xlab = "PCT_WHITE", ylab ="res")
+lines(lowess(r ~modified_final_dataset$PCT_WHITE), lty=2, col="red")
+
+plot(r2_m ~modified_final_dataset$COSTT4_A, main = "Average Cost per Year", xlab = "COSTT4_A", ylab ="res")
+lines(lowess(r ~modified_final_dataset$COSTT4_A), lty=2, col="red")
+
+plot(r2_m ~modified_final_dataset$FEMALE, main = "Percentage of Female students", xlab = "FEMALE", ylab ="res")
+lines(lowess(r ~modified_final_dataset$FEMALE), lty=2, col="red")
+
+plot(r2_m ~modified_final_dataset$AVGFACSAL, main = "Average Faculty Salary", xlab = "AVGFACSAL", ylab ="res")
+lines(lowess(r ~modified_final_dataset$AVGFACSAL), lty=2, col="red")
+
+# EDITED THIS, CHANGE $NUMBRANCH back into $CAMPUSES REMOVE
+plot(r2_m ~modified_final_dataset$CAMPUSES, main = "Number of Campuses", xlab = "NUMBRANCH", ylab ="res")
+lines(lowess(r ~modified_final_dataset$CAMPUSES), lty=2, col="red")
+```
+The boxcox transformations didn't seem to correct the issues seen in the residuals of  average faculty salary. (a small beneficial change was seen in percentage of female students)
+
+This information in conjunction with the pairwise comparison seems to conclude that there is probably 
+      a non-linear relationship going on between average faculty salary and average cost per year for students. 
+      
+      Originally, the relationships between COSTT4_A and ADM rate wasn't linear aswell. as demonstrated by the huge drop in admission rates around the 37 thousand mark. 
+      
+      FUrthermore, normality assumption is broken for the percentage of female students at the university. It is obvious that 
+      
+
+( Question to Hoi>> should we drop it? )
+      
+
+
+
+
+```{r}
+# results from residual plots seems like there is random error
+
+# in our normal Q-Q plot>>> we can see we haven't fully corrected our normality 
+qqnorm(r2_m)
+qqline(r, col = "steelblue", lwd = 2)
+
+qqnorm(r)
+qqline(r, col = "steelblue", lwd = 2)
+```
+
+What we can interpret: 
+
+
+Limitations: not all of the predictors that we used in our model can be easily transformed in box cox. 
+
+
+
+```{r}
+summary(mod3_m)
+```
+
+Look at the summary again 
